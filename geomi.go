@@ -44,7 +44,7 @@ import (
 )
 
 // schemeSep is the char sequence that separates the scheme from the rest of the uri
-const schemeSep = ":\\"
+const schemeSep = "://"
 
 // Fetcher is an interface that makes it easier to test. In the future, it may be
 // useful for other purposes, but that would require exporting the method that uses
@@ -85,7 +85,6 @@ type Site struct {
 // TODO: make the design cleaner
 func (s Site) Fetch(url string) (body string, urls []string, err error) {
 	// see if the passed url is outside of the baseURL
-
 	resp, err := http.Get(url)
 	if err != nil {
 		return "", nil, err
@@ -97,16 +96,16 @@ func (s Site) Fetch(url string) (body string, urls []string, err error) {
 	if len(tokens) == 0 {
 		return "", nil, fmt.Errorf("%s: nothing in body", url)
 	}
-
 	urls, err = s.linksFromTokens(tokens)
 	if err != nil {
 		return "", nil, err
 	}
-
 	return buff.String(), urls, nil
 }
 
 // linksFromTokens returns a list of links (href a) found in the token slice
+// TODO should internal links be tracked separatly? i.e. record them in a
+// separate var (so they don't get fetched)
 func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 	var links []string
 	for _, token := range tokens {
@@ -131,11 +130,11 @@ func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 // Spider crawls the target. It contains all information needed to manage the crawl
 // including keeping track of work to do, work done, and the results.
 type Spider struct {
-	q *queue.Queue
+	*queue.Queue
 	sync.Mutex
 	wg               sync.WaitGroup
 	basePath         string // start url w/o scheme
-	*net.URL                //baseURL as a net.URL
+	*url.URL                //baseURL as a url.URL
 	concurrency      int    // concurrency level of crawling
 	getWait          int64  // if > 0, interval, in milliseconds to wait between gets
 	getJitter        int    // prevents thundering herd or fetcher synchronization
@@ -151,14 +150,22 @@ type Spider struct {
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
 // the crawl. It is also the restriction on the crawl:
-func NewSpider(url string) (*Spider, error) {
-	spider := &Spider{q: queue.New(128, 0), Pages: make(map[string]Page), foundURLs: make(map[string]struct{})}
-	spider.URL, err := url.Parse(url)
+func NewSpider(base string) (*Spider, error) {
+	var err error
+	spider := &Spider{Queue: queue.New(128, 0),
+		Pages:       make(map[string]Page),
+		foundURLs:   make(map[string]struct{}),
+		fetchedURLs: make(map[string]error),
+		skippedURLs: make(map[string]struct{}),
+		extHosts:    make(map[string]struct{}),
+		extLinks:    make(map[string]struct{}),
+	}
+	spider.URL, err = url.Parse(base)
 	if err != nil {
 		return nil, err
 	}
-	spider.basePath = strings.TrimPrefx(URL.String(), URL.Scheme + schemeSep) 
-	return &spider
+	spider.basePath = strings.TrimPrefix(spider.URL.String(), spider.URL.Scheme+schemeSep)
+	return spider, nil
 }
 
 // Crawl is the exposed method for starting a crawl at baseURL. The crawl private method
@@ -168,7 +175,7 @@ func NewSpider(url string) (*Spider, error) {
 func (s *Spider) Crawl(depth int) (message string, err error) {
 	s.maxDepth = depth
 	S := Site{URL: s.URL}
-	s.q.Enqueue(Page{url: s.URL.String()})
+	s.Queue.Enqueue(Page{url: s.URL.String()})
 	err = s.crawl(S)
 	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), err
 }
@@ -176,38 +183,62 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 // This crawl does all the work.
 func (s *Spider) crawl(fetcher Fetcher) error {
 	var err error
-	for !s.q.IsEmpty() {
+	for !s.Queue.IsEmpty() {
 		// get next item from queue
-		page := s.q.Dequeue().(Page)
+		page := s.Queue.Dequeue().(Page)
 		// if a depth value was passed and the distance is > depth, we are done
 		// depth of 0 means no limit
 		if s.maxDepth != -1 && page.distance > s.maxDepth {
 			return nil
 		}
-		s.Lock()
-		if _, ok := s.foundURLs[page.url]; ok {
-			// don't do anything if it's already in the found map
-			s.Unlock()
+		// check to see if this url should be skipped
+		if s.skip(&page) {
+			s.skippedURLs[page.url] = struct{}{}
 			continue
 		}
 		s.foundURLs[page.url] = struct{}{}
-		s.Unlock()
 		// get the url
 		page.body, page.links, err = fetcher.Fetch(page.url)
-		if err != nil {
-			return fmt.Errorf("<- Error on %v: %v\n", page.url, err)
-		}
-		// add the page to the map. map isn't checked for membership becuase we don't
+		// add the page and status to the map. map isn't checked for membership becuase we don't
 		// fetch found urls.
 		s.Lock()
 		s.Pages[page.url] = page
+		s.fetchedURLs[page.url] = err
 		s.Unlock()
 		// add the urls that the node contains to the queue
 		for _, url := range page.links {
-			s.q.Enqueue(Page{url: url, distance: page.distance + 1})
+			s.Queue.Enqueue(Page{url: url, distance: page.distance + 1})
 		}
 	}
 	return nil
+}
+
+// skip determines whether the url should be skipped.
+//   * skip urls that have already been fetched
+//   * skip urls that are outside of the basePath
+//   * conditionally skip urls that are outside of the current scheme, even if
+//     they are within the current pasePath
+func (s *Spider) skip(p *Page) bool {
+	s.Lock()
+	defer s.Unlock()
+	if _, ok := s.foundURLs[p.url]; ok {
+		return true
+	}
+	// need the parse url to do the other checks
+	u, _ := url.Parse(p.url)
+	// skip if we are restricted to current scheme
+	if s.RestrictToScheme {
+		if u.Scheme != s.URL.Scheme {
+			return true
+		}
+	}
+	// skip if the url is outside of base
+	// remove the scheme + schemePrefix so just the rest of the url is being compared
+	base := strings.TrimPrefix(p.url, u.Scheme+schemeSep)
+	if !strings.HasPrefix(base, s.basePath) {
+		return true
+	}
+	return false
 }
 
 // getTokens returns all tokens in the body

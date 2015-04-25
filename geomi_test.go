@@ -98,8 +98,8 @@ func TestCrawl(t *testing.T) {
 			""},
 	}
 	for _, test := range tests {
-		s := NewSpider("http://golang.org/")
-		s.q.Enqueue(Page{url: s.baseURL})
+		s, _ := NewSpider("http://golang.org/")
+		s.Queue.Enqueue(Page{url: s.URL.String()})
 		s.maxDepth = test.depth
 		err := s.crawl(tester)
 		if test.expectedErr == "" && err != nil {
@@ -165,4 +165,37 @@ func TestCrawl(t *testing.T) {
 	}
 
 	// check that the fetched urls match expectations
+}
+
+// check Spider.skip()
+func TestSkip(t *testing.T) {
+	tests := []struct {
+		url              string
+		RestrictToScheme bool
+		expected         bool
+	}{
+		{"http://golang.org/", false, true},
+		{"https://golang.org/", true, true},
+		{"http://golang.org/cmd/", false, false},
+		{"https://golang.org/cmd/", true, true},
+		{"http://golang.org/cmd/gofmt/", false, false},
+		{"http://golang.org/cmd/gofmt/", true, false},
+		{"https://golang.org/cmd/gofmt/", false, false},
+		{"https://golang.org/cmd/gofmt/", true, true},
+		{"http://golang.org/pkg/", false, true},
+		{"https://golang.org/pkg/", false, true},
+		{"http://golang.org/pkg/", true, true},
+		{"https://golang.org/pkg/", true, true},
+		{"http://google.com/", false, true},
+		{"https://google.com/", true, true},
+	}
+	s, _ := NewSpider("http://golang.org/cmd/")
+	for _, test := range tests {
+		s.RestrictToScheme = test.RestrictToScheme
+		page := &Page{url: test.url}
+		skip := s.skip(page)
+		if skip != test.expected {
+			t.Errorf("Expected skip of %q to be %t, got %t", test.url, test.expected, skip)
+		}
+	}
 }
