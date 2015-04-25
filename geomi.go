@@ -43,6 +43,12 @@ import (
 	"golang.org/x/net/html"
 )
 
+// schemeSep is the char sequence that separates the scheme from the rest of the uri
+const schemeSep = ":\\"
+
+// Fetcher is an interface that makes it easier to test. In the future, it may be
+// useful for other purposes, but that would require exporting the method that uses
+// it first.
 type Fetcher interface {
 	// Fetch returns the body of URL and
 	// a slice of URLs found on that page
@@ -122,27 +128,37 @@ func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 	return links, nil
 }
 
+// Spider crawls the target. It contains all information needed to manage the crawl
+// including keeping track of work to do, work done, and the results.
 type Spider struct {
-	q           *queue.Queue
-	wg          sync.WaitGroup
-	concurrency int // concurrency level of crawling
-	//	urls chan string
-	//	nodes chan *Page
-	//	stop chan struct{}
-
+	q *queue.Queue
 	sync.Mutex
-	maxDepth  int
-	baseURL   string
-	Pages     map[string]Page
-	foundURLs map[string]struct{}
-	extHosts  map[string]struct{} // list of external hosts
-	extLinks  map[string]struct{} // list of external links
+	wg               sync.WaitGroup
+	basePath         string // start url w/o scheme
+	*net.URL                //baseURL as a net.URL
+	concurrency      int    // concurrency level of crawling
+	getWait          int64  // if > 0, interval, in milliseconds to wait between gets
+	getJitter        int    // prevents thundering herd or fetcher synchronization
+	RestrictToScheme bool   // if true, only crawls urls with the same scheme as baseURL
+	maxDepth         int
+	Pages            map[string]Page
+	foundURLs        map[string]struct{} // keeps track of urls found to prevent recrawling
+	fetchedURLs      map[string]error    // urls that have been fetched with their status
+	skippedURLs      map[string]struct{} // urls within the same domain that are outside of the baseURL
+	extHosts         map[string]struct{} // list of external hosts
+	extLinks         map[string]struct{} // list of external links
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
 // the crawl. It is also the restriction on the crawl:
-func NewSpider(url string) *Spider {
-	return &Spider{q: queue.New(128, 0), baseURL: url, Pages: make(map[string]Page), foundURLs: make(map[string]struct{})}
+func NewSpider(url string) (*Spider, error) {
+	spider := &Spider{q: queue.New(128, 0), Pages: make(map[string]Page), foundURLs: make(map[string]struct{})}
+	spider.URL, err := url.Parse(url)
+	if err != nil {
+		return nil, err
+	}
+	spider.basePath = strings.TrimPrefx(URL.String(), URL.Scheme + schemeSep) 
+	return &spider
 }
 
 // Crawl is the exposed method for starting a crawl at baseURL. The crawl private method
@@ -150,20 +166,10 @@ func NewSpider(url string) *Spider {
 // baseURL. If depth == -1, no limits are set and it is expected that the entire site
 // will be crawled.
 func (s *Spider) Crawl(depth int) (message string, err error) {
-	if s.baseURL == "" {
-		return "", fmt.Errorf("start url expected, none set")
-	}
 	s.maxDepth = depth
-
-	// Parse the baseURL as a URL
-	url, err := url.Parse(s.baseURL)
-	if err != nil {
-		return "", err
-	}
-	S := Site{URL: url}
-	s.q.Enqueue(Page{url: s.baseURL})
+	S := Site{URL: s.URL}
+	s.q.Enqueue(Page{url: s.URL.String()})
 	err = s.crawl(S)
-
 	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), err
 }
 
@@ -178,7 +184,6 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		if s.maxDepth != -1 && page.distance > s.maxDepth {
 			return nil
 		}
-
 		s.Lock()
 		if _, ok := s.foundURLs[page.url]; ok {
 			// don't do anything if it's already in the found map
@@ -187,13 +192,11 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		}
 		s.foundURLs[page.url] = struct{}{}
 		s.Unlock()
-
 		// get the url
 		page.body, page.links, err = fetcher.Fetch(page.url)
 		if err != nil {
 			return fmt.Errorf("<- Error on %v: %v\n", page.url, err)
 		}
-
 		// add the page to the map. map isn't checked for membership becuase we don't
 		// fetch found urls.
 		s.Lock()
