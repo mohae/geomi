@@ -162,13 +162,13 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 	}
 	S := Site{URL: url}
 	s.q.Enqueue(Page{url: s.baseURL})
-	s.crawl(10, S)
+	err = s.crawl(S)
 
-	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), nil
+	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), err
 }
 
 // This crawl does all the work.
-func (s *Spider) crawl(depth int, fetcher Fetcher) {
+func (s *Spider) crawl(fetcher Fetcher) error {
 	var err error
 	for !s.q.IsEmpty() {
 		// get next item from queue
@@ -176,7 +176,7 @@ func (s *Spider) crawl(depth int, fetcher Fetcher) {
 		// if a depth value was passed and the distance is > depth, we are done
 		// depth of 0 means no limit
 		if s.maxDepth != -1 && page.distance > s.maxDepth {
-			return
+			return nil
 		}
 
 		s.Lock()
@@ -191,8 +191,7 @@ func (s *Spider) crawl(depth int, fetcher Fetcher) {
 		// get the url
 		page.body, page.links, err = fetcher.Fetch(page.url)
 		if err != nil {
-			fmt.Printf("<- Error on %v: %v\n", page.url, err)
-			return
+			return fmt.Errorf("<- Error on %v: %v\n", page.url, err)
 		}
 
 		// add the page to the map. map isn't checked for membership becuase we don't
@@ -205,6 +204,7 @@ func (s *Spider) crawl(depth int, fetcher Fetcher) {
 			s.q.Enqueue(Page{url: url, distance: page.distance + 1})
 		}
 	}
+	return nil
 }
 
 // getTokens returns all tokens in the body
