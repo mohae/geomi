@@ -40,11 +40,9 @@ import (
 	"sync"
 
 	"github.com/mohae/utilitybelt/queue"
+	"github.com/temoto/robotstxt-go"
 	"golang.org/x/net/html"
 )
-
-// schemeSep is the char sequence that separates the scheme from the rest of the uri
-const schemeSep = "://"
 
 // Fetcher is an interface that makes it easier to test. In the future, it may be
 // useful for other purposes, but that would require exporting the method that uses
@@ -69,7 +67,7 @@ var loading = errors.New("url load in progress") // sentinel value
 // could be something as simple as the url for cat.jpg on your site and represent that
 // image.
 type Page struct {
-	url      string
+	*url.URL
 	distance int
 	body     string
 	links    []string // immediate children
@@ -113,7 +111,7 @@ func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 			for _, attr := range token.Attr {
 				// We only care about links that aren't #
 				if attr.Key == "href" && !strings.HasPrefix(attr.Val, "#") {
-					//get the absolute url
+					// parse the url
 					url, err := url.Parse(attr.Val)
 					if err != nil {
 						return nil, err
@@ -133,38 +131,44 @@ type Spider struct {
 	*queue.Queue
 	sync.Mutex
 	wg               sync.WaitGroup
-	basePath         string // start url w/o scheme
-	*url.URL                //baseURL as a url.URL
+	*url.URL                // the start url
+	UserAgent        string // the user agent to use
 	concurrency      int    // concurrency level of crawling
 	getWait          int64  // if > 0, interval, in milliseconds to wait between gets
 	getJitter        int    // prevents thundering herd or fetcher synchronization
 	RestrictToScheme bool   // if true, only crawls urls with the same scheme as baseURL
+	RespectRobots    bool   // whether or not to respect the robots.txt
+	robots           *robotstxt.Group
 	maxDepth         int
 	Pages            map[string]Page
 	foundURLs        map[string]struct{} // keeps track of urls found to prevent recrawling
 	fetchedURLs      map[string]error    // urls that have been fetched with their status
-	skippedURLs      map[string]struct{} // urls within the same domain that are outside of the baseURL
-	extHosts         map[string]struct{} // list of external hosts
-	extLinks         map[string]struct{} // list of external links
+	skippedURLs      map[string]struct{} // urls within the same domain that are not retrieved
+	extHosts         map[string]struct{} // list of external hosts TODO: elide?
+	extLinks         map[string]struct{} // list of external links; not fetched
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
 // the crawl. It is also the restriction on the crawl:
-func NewSpider(base string) (*Spider, error) {
+func NewSpider(start string) (*Spider, error) {
+	if start == "" {
+		return nil, errors.New("newSpider: the start url cannot be empty")
+	}
 	var err error
 	spider := &Spider{Queue: queue.New(128, 0),
-		Pages:       make(map[string]Page),
-		foundURLs:   make(map[string]struct{}),
-		fetchedURLs: make(map[string]error),
-		skippedURLs: make(map[string]struct{}),
-		extHosts:    make(map[string]struct{}),
-		extLinks:    make(map[string]struct{}),
+		UserAgent:     "geomi",
+		RespectRobots: true,
+		Pages:         make(map[string]Page),
+		foundURLs:     make(map[string]struct{}),
+		fetchedURLs:   make(map[string]error),
+		skippedURLs:   make(map[string]struct{}),
+		extHosts:      make(map[string]struct{}),
+		extLinks:      make(map[string]struct{}),
 	}
-	spider.URL, err = url.Parse(base)
+	spider.URL, err = url.Parse(start)
 	if err != nil {
 		return nil, err
 	}
-	spider.basePath = strings.TrimPrefix(spider.URL.String(), spider.URL.Scheme+schemeSep)
 	return spider, nil
 }
 
@@ -175,7 +179,11 @@ func NewSpider(base string) (*Spider, error) {
 func (s *Spider) Crawl(depth int) (message string, err error) {
 	s.maxDepth = depth
 	S := Site{URL: s.URL}
-	s.Queue.Enqueue(Page{url: s.URL.String()})
+	// if we are to respect the robots.txt, set up the info
+	if s.RespectRobots {
+		s.getRobotsTxt()
+	}
+	s.Queue.Enqueue(Page{URL: s.URL})
 	err = s.crawl(S)
 	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), err
 }
@@ -192,22 +200,23 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 			return nil
 		}
 		// check to see if this url should be skipped
-		if s.skip(&page) {
-			s.skippedURLs[page.url] = struct{}{}
+		if s.skip(page.URL) {
+			s.skippedURLs[page.URL.String()] = struct{}{}
 			continue
 		}
-		s.foundURLs[page.url] = struct{}{}
+		s.foundURLs[page.URL.String()] = struct{}{}
 		// get the url
-		page.body, page.links, err = fetcher.Fetch(page.url)
+		page.body, page.links, err = fetcher.Fetch(page.URL.String())
 		// add the page and status to the map. map isn't checked for membership becuase we don't
 		// fetch found urls.
 		s.Lock()
-		s.Pages[page.url] = page
-		s.fetchedURLs[page.url] = err
+		s.Pages[page.URL.String()] = page
+		s.fetchedURLs[page.URL.String()] = err
 		s.Unlock()
 		// add the urls that the node contains to the queue
-		for _, url := range page.links {
-			s.Queue.Enqueue(Page{url: url, distance: page.distance + 1})
+		for _, l := range page.links {
+			u, _ := url.Parse(l)
+			s.Queue.Enqueue(Page{URL: u, distance: page.distance + 1})
 		}
 	}
 	return nil
@@ -218,27 +227,44 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 //   * skip urls that are outside of the basePath
 //   * conditionally skip urls that are outside of the current scheme, even if
 //     they are within the current pasePath
-func (s *Spider) skip(p *Page) bool {
+//   * skip if not allowed by robots
+func (s *Spider) skip(u *url.URL) bool {
 	s.Lock()
 	defer s.Unlock()
-	if _, ok := s.foundURLs[p.url]; ok {
+	if _, ok := s.foundURLs[u.String()]; ok {
 		return true
 	}
-	// need the parse url to do the other checks
-	u, _ := url.Parse(p.url)
 	// skip if we are restricted to current scheme
 	if s.RestrictToScheme {
 		if u.Scheme != s.URL.Scheme {
 			return true
 		}
 	}
+	//	if s.RespectRobots {
+	//		ok := s.robotsAllowed(p.URL)
+	//	}
 	// skip if the url is outside of base
 	// remove the scheme + schemePrefix so just the rest of the url is being compared
-	base := strings.TrimPrefix(p.url, u.Scheme+schemeSep)
-	if !strings.HasPrefix(base, s.basePath) {
+	if !strings.HasPrefix(u.Path, s.URL.Path) {
 		return true
 	}
 	return false
+}
+
+// getRobotsTxt retrieves and processes the site's robot.txt. If the robots.txt doesn't
+// exist, it is assumed that everything is allowed.
+func (s *Spider) getRobotsTxt() error {
+	// spider url is
+	return nil
+}
+
+// robotsAllowed checks to see if the passed path is allowed by Robots.txt. If the
+// robots isn't set, it's always true
+func (s *Spider) robotsAllowed(u *url.URL) bool {
+	if s.robots != nil {
+		return s.robots.Test(u.Path)
+	}
+	return true
 }
 
 // getTokens returns all tokens in the body
