@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 )
 
 // testFetcher is Fetcher for testing
@@ -106,7 +107,6 @@ func TestNewSpider(t *testing.T) {
 			}
 			continue
 		}
-		fmt.Println(test.url)
 		if s.URL.String() != test.expectedURL {
 			t.Errorf("Expected basePath to be %q; %q", test.expectedURL, s.URL.String())
 		}
@@ -212,37 +212,61 @@ func TestCrawl(t *testing.T) {
 
 }
 
-/*
 // check Spider.skip()
 func TestSkip(t *testing.T) {
 	tests := []struct {
-		url              string
+		s string
+		*url.URL
 		RestrictToScheme bool
 		expected         bool
 	}{
-		{"http://golang.org/", false, true},
-		{"https://golang.org/", true, true},
-		{"http://golang.org/cmd/", false, false},
-		{"https://golang.org/cmd/", true, true},
-		{"http://golang.org/cmd/gofmt/", false, false},
-		{"http://golang.org/cmd/gofmt/", true, false},
-		{"https://golang.org/cmd/gofmt/", false, false},
-		{"https://golang.org/cmd/gofmt/", true, true},
-		{"http://golang.org/pkg/", false, true},
-		{"https://golang.org/pkg/", false, true},
-		{"http://golang.org/pkg/", true, true},
-		{"https://golang.org/pkg/", true, true},
-		{"http://google.com/", false, true},
-		{"https://google.com/", true, true},
+		{s: "http://golang.org/", RestrictToScheme: false, expected: true},
+		{s: "https://golang.org/", RestrictToScheme: true, expected: true},
+		{s: "http://golang.org/cmd/", RestrictToScheme: false, expected: false},
+		{s: "https://golang.org/cmd/", RestrictToScheme: true, expected: true},
+		{s: "http://golang.org/cmd/gofmt/", RestrictToScheme: false, expected: false},
+		{s: "http://golang.org/cmd/gofmt/", RestrictToScheme: true, expected: false},
+		{s: "https://golang.org/cmd/gofmt/", RestrictToScheme: false, expected: false},
+		{s: "https://golang.org/cmd/gofmt/", RestrictToScheme: true, expected: true},
+		{s: "http://golang.org/pkg/", RestrictToScheme: false, expected: true},
+		{s: "https://golang.org/pkg/", RestrictToScheme: false, expected: true},
+		{s: "http://golang.org/pkg/", RestrictToScheme: true, expected: true},
+		{s: "https://golang.org/pkg/", RestrictToScheme: true, expected: true},
+		{s: "http://google.com/", RestrictToScheme: false, expected: true},
+		{s: "https://google.com/", RestrictToScheme: true, expected: true},
+	}
+	for i, test := range tests {
+		test.URL, _ = url.Parse(test.s)
+		tests[i] = test
 	}
 	s, _ := NewSpider("http://golang.org/cmd/")
 	for _, test := range tests {
 		s.RestrictToScheme = test.RestrictToScheme
-		page := &Page{url: test.url}
-		skip := s.skip(page)
+		page := &Page{URL: test.URL}
+		skip := s.skip(page.URL)
 		if skip != test.expected {
-			t.Errorf("Expected skip of %q to be %t, got %t", test.url, test.expected, skip)
+			t.Errorf("Expected skip of %q to be %t, got %t", test.URL, test.expected, skip)
 		}
 	}
 }
-*/
+
+func TestFetchInterval(t *testing.T) {
+	s, _ := NewSpider("http://golang.org/")
+	u, _ := url.Parse("http://golang.org/")
+	s.Queue.Enqueue(Page{URL: u})
+	s.SetFetchInterval(200) // 200ms
+	if s.fetchInterval != 200 {
+		fmt.Errorf("Expected fetchInterval to be 200, got %d", s.fetchInterval)
+	}
+	if s.intervalJitter != 40 {
+		fmt.Errorf("Expected intervalJitter to be 40, got %d", s.intervalJitter)
+	}
+	t1 := time.Now().UTC().UnixNano() / 1000000
+	s.maxDepth = 1
+	s.crawl(tester)
+	t2 := time.Now().UTC().UnixNano() / 1000000
+	// the time it took should be in the range of 3 * (fetchInterval) - 3 * (fetchInterval + intervalJitter)
+	if t2-t1 < (3*s.fetchInterval) || t2-t1 > (3*(s.fetchInterval+s.intervalJitter)) {
+		t.Errorf("Expected the fecth of 3 urls to take between %dms and %dms, it took %dms", (3 * s.fetchInterval), (3 * (s.fetchInterval + s.intervalJitter)), t2-t1)
+	}
+}

@@ -34,10 +34,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mohae/utilitybelt/queue"
 	"github.com/temoto/robotstxt.go"
@@ -134,8 +136,8 @@ type Spider struct {
 	*url.URL                // the start url
 	bot              string // the name of the bot for robots
 	concurrency      int    // concurrency level of crawling
-	getWait          int64  // if > 0, interval, in milliseconds to wait between gets
-	getJitter        int    // prevents thundering herd or fetcher synchronization
+	fetchInterval    int64  // if > 0, interval, in milliseconds to wait between gets
+	intervalJitter   int64  // the max jitter to be added, per fetch. Jitter is a rand with this as max.
 	RestrictToScheme bool   // if true, only crawls urls with the same scheme as baseURL
 	RespectRobots    bool   // whether or not to respect the robots.txt
 	robots           *robotstxt.Group
@@ -170,6 +172,22 @@ func NewSpider(start string) (*Spider, error) {
 		return nil, err
 	}
 	return spider, nil
+}
+
+// SetFetchInterval set's the spiders wait interval, and calculates the intervalJitter
+// value for the random jitter added to the wait. This value is in milliseconds, 1000
+// means 1 second.
+//
+// When fetchInterval > 0:
+// time between fetches = fetchInterval + rand(intervalJitter)
+// max time between fetches = fetchInterval + intervalJitter
+func (s *Spider) SetFetchInterval(i int64) {
+	s.fetchInterval = i
+	jitter := i / 5 // jitter is, at most 20% of the fetchInterval, Min interval is 10ms
+	// 10ms is used as the floor because arbitrary. A larger floor might be reasonable
+	if jitter >= 10 {
+		s.intervalJitter = jitter
+	}
 }
 
 // Crawl is the exposed method for starting a crawl at baseURL. The crawl private method
@@ -218,6 +236,15 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 			u, _ := url.Parse(l)
 			s.Queue.Enqueue(Page{URL: u, distance: page.distance + 1})
 		}
+		// if their is a wait between fetches, sleep for that + random jitter
+		if s.fetchInterval > 0 {
+			wait := s.fetchInterval
+			// if there is a value for jitter, add a random jitter
+			if s.intervalJitter > 0 {
+				wait += rand.Int63n(s.intervalJitter)
+			}
+			time.Sleep(time.Duration(wait) * time.Millisecond)
+		}
 	}
 	return nil
 }
@@ -258,7 +285,7 @@ func (s *Spider) getRobotsTxt() error {
 	if err != nil {
 		return err
 	}
-	robots, err := robotstxt.FromResponse(response)
+	robots, err := robotstxt.FromResponse(resp)
 	if err != nil {
 		return err
 	}
@@ -286,4 +313,9 @@ func getTokens(body io.Reader) []html.Token {
 		}
 		tokens = append(tokens, page.Token())
 	}
+}
+
+func init() {
+	// We just use math/rand because it's good enough for our purpose.
+	rand.Seed(time.Now().UTC().UnixNano())
 }
