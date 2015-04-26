@@ -40,7 +40,7 @@ import (
 	"sync"
 
 	"github.com/mohae/utilitybelt/queue"
-	"github.com/temoto/robotstxt-go"
+	"github.com/temoto/robotstxt.go"
 	"golang.org/x/net/html"
 )
 
@@ -132,7 +132,7 @@ type Spider struct {
 	sync.Mutex
 	wg               sync.WaitGroup
 	*url.URL                // the start url
-	UserAgent        string // the user agent to use
+	bot              string // the name of the bot for robots
 	concurrency      int    // concurrency level of crawling
 	getWait          int64  // if > 0, interval, in milliseconds to wait between gets
 	getJitter        int    // prevents thundering herd or fetcher synchronization
@@ -156,7 +156,7 @@ func NewSpider(start string) (*Spider, error) {
 	}
 	var err error
 	spider := &Spider{Queue: queue.New(128, 0),
-		UserAgent:     "geomi",
+		bot:           "geomi",
 		RespectRobots: true,
 		Pages:         make(map[string]Page),
 		foundURLs:     make(map[string]struct{}),
@@ -254,7 +254,15 @@ func (s *Spider) skip(u *url.URL) bool {
 // getRobotsTxt retrieves and processes the site's robot.txt. If the robots.txt doesn't
 // exist, it is assumed that everything is allowed.
 func (s *Spider) getRobotsTxt() error {
-	// spider url is
+	resp, err := http.Get("http://" + s.URL.Host)
+	if err != nil {
+		return err
+	}
+	robots, err := robotstxt.FromResponse(response)
+	if err != nil {
+		return err
+	}
+	s.robots = robots.FindGroup(s.bot)
 	return nil
 }
 
