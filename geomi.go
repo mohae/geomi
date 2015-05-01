@@ -218,7 +218,6 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		}
 		// check to see if this url should be skipped
 		if s.skip(page.URL) {
-			s.skippedURLs[page.URL.String()] = struct{}{}
 			continue
 		}
 		s.foundURLs[page.URL.String()] = struct{}{}
@@ -259,11 +258,14 @@ func (s *Spider) skip(u *url.URL) bool {
 	_, ok := s.foundURLs[u.String()]
 	s.Unlock()
 	if ok { // if it was found, skip it
+		s.addSkippedURL(u)
 		return true
 	}
+
 	// skip if we are restricted to current scheme
 	if s.RestrictToScheme {
 		if u.Scheme != s.URL.Scheme {
+			s.addSkippedURL(u)
 			return true
 		}
 	}
@@ -276,9 +278,17 @@ func (s *Spider) skip(u *url.URL) bool {
 	// skip if the url is outside of base
 	// remove the scheme + schemePrefix so just the rest of the url is being compared
 	if !strings.HasPrefix(u.Path, s.URL.Path) {
+		s.addSkippedURL(u)
 		return true
 	}
 	return false
+}
+
+// addSkippedURL add's the url info too the skipped info
+func (s *Spider) addSkippedURL(u *url.URL) {
+	s.Lock()
+	s.skippedURLs[u.Path] = struct{}{}
+	s.Unlock()
 }
 
 // getRobotsTxt retrieves and processes the site's robot.txt. If the robots.txt doesn't
