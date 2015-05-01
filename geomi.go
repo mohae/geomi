@@ -80,8 +80,7 @@ type Site struct {
 	*url.URL
 }
 
-// Implements fetcher. This seems wierd to me, but the design (including the crawl
-// function) enables testing.
+// Implements fetcher.
 // TODO: make the design cleaner
 func (s Site) Fetch(url string) (body string, urls []string, err error) {
 	// see if the passed url is outside of the baseURL
@@ -257,8 +256,9 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 //   * skip if not allowed by robots
 func (s *Spider) skip(u *url.URL) bool {
 	s.Lock()
-	defer s.Unlock()
-	if _, ok := s.foundURLs[u.String()]; ok {
+	_, ok := s.foundURLs[u.String()]
+	s.Unlock()
+	if ok { // if it was found, skip it
 		return true
 	}
 	// skip if we are restricted to current scheme
@@ -267,9 +267,12 @@ func (s *Spider) skip(u *url.URL) bool {
 			return true
 		}
 	}
-	//	if s.RespectRobots {
-	//		ok := s.robotsAllowed(p.URL)
-	//	}
+	if s.RespectRobots {
+		ok := s.robotsAllowed(u)
+		if !ok {
+			return false
+		}
+	}
 	// skip if the url is outside of base
 	// remove the scheme + schemePrefix so just the rest of the url is being compared
 	if !strings.HasPrefix(u.Path, s.URL.Path) {
