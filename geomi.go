@@ -75,6 +75,13 @@ type Page struct {
 	links    []string // immediate children
 }
 
+// responseInfo contains the status and error information from a get
+type responseInfo struct {
+	Status     string
+	StatusCode int
+	Err        error
+}
+
 // Site is a type that implements fetcher
 type Site struct {
 	*url.URL
@@ -143,11 +150,11 @@ type Spider struct {
 	robots             *robotstxt.Group
 	maxDepth           int
 	Pages              map[string]Page
-	foundURLs          map[string]struct{} // keeps track of urls found to prevent recrawling
-	fetchedURLs        map[string]error    // urls that have been fetched with their status
-	skippedURLs        map[string]struct{} // urls within the same domain that are not retrieved
-	externalHosts      map[string]struct{} // list of external hosts TODO: elide?
-	externalLinks      map[string]struct{} // list of external links; not fetched
+	foundURLs          map[string]struct{}     // keeps track of urls found to prevent recrawling
+	fetchedURLs        map[string]error        // urls that have been fetched with their status
+	skippedURLs        map[string]struct{}     // urls within the same domain that are not retrieved
+	externalHosts      map[string]struct{}     // list of external hosts TODO: elide?
+	externalLinks      map[string]responseInfo // list of external links; if fetched,
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
@@ -165,7 +172,7 @@ func NewSpider(start string) (*Spider, error) {
 		fetchedURLs:   make(map[string]error),
 		skippedURLs:   make(map[string]struct{}),
 		externalHosts: make(map[string]struct{}),
-		externalLinks: make(map[string]struct{}),
+		externalLinks: make(map[string]responseInfo),
 	}
 	spider.URL, err = url.Parse(start)
 	if err != nil {
@@ -313,12 +320,41 @@ func (s *Spider) externalURL(u *url.URL) bool {
 		// same with url
 		_, ok = s.externalLinks[u.String()]
 		if !ok {
-			s.externalLinks[u.String()] = struct{}{}
+			s.externalLinks[u.String()] = responseInfo{}
 		}
 		s.Unlock()
 		return true
 	}
 	return false
+}
+
+// fetchExternalLink: fetches an external link and check's it status. Note, this
+// does not implement fetcher
+func (s *Spider) fetchExternalLink(u *url.URL) error {
+	// if this has already benn fetched, don't
+	var ri responseInfo
+	s.Lock()
+	r, _ := s.externalLinks[u.String()]
+	if r != ri { // if !0 value, it's been retrieved
+		s.Unlock()
+		return nil
+	}
+	s.Unlock()
+	resp, err := http.Get(u.String())
+	resp.Body.Close()
+	if err != nil {
+		r.Err = err
+		s.Lock()
+		s.externalLinks[u.String()] = r
+		s.Unlock()
+		return err
+	}
+	r.Status = resp.Status
+	r.StatusCode = resp.StatusCode
+	s.Lock()
+	s.externalLinks[u.String()] = r
+	s.Unlock()
+	return nil
 }
 
 // getRobotsTxt retrieves and processes the site's robot.txt. If the robots.txt doesn't
