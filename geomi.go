@@ -216,8 +216,13 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		if s.maxDepth != -1 && page.distance > s.maxDepth {
 			return nil
 		}
-		// check to see if this url should be skipped
+		// see if this is an external url
+		if s.externalURL(page.URL) {
+			continue
+		}
+		// check to see if this url should be skipped for other reasons
 		if s.skip(page.URL) {
+			// see if the skipped is external and process accordingly
 			continue
 		}
 		s.foundURLs[page.URL.String()] = struct{}{}
@@ -289,6 +294,27 @@ func (s *Spider) addSkippedURL(u *url.URL) {
 	s.Lock()
 	s.skippedURLs[u.Path] = struct{}{}
 	s.Unlock()
+}
+
+// externalURL check's to see if the url is external to the site, host isn't the same.
+// and add's that info to the ext structs.
+func (s *Spider) externalURL(u *url.URL) bool {
+	if u.Host != s.URL.Host {
+		s.Lock()
+		// see if the host is already in the map
+		_, ok := s.extHosts[u.Host]
+		if !ok {
+			s.extHosts[u.Host] = struct{}{}
+		}
+		// same with url
+		_, ok = s.extLinks[u.Path]
+		if !ok {
+			s.extLinks[u.Path] = struct{}{}
+		}
+		s.Unlock()
+		return true
+	}
+	return false
 }
 
 // getRobotsTxt retrieves and processes the site's robot.txt. If the robots.txt doesn't
