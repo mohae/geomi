@@ -131,22 +131,23 @@ func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 type Spider struct {
 	*queue.Queue
 	sync.Mutex
-	wg               sync.WaitGroup
-	*url.URL                // the start url
-	bot              string // the name of the bot for robots
-	concurrency      int    // concurrency level of crawling
-	fetchInterval    int64  // if > 0, interval, in milliseconds to wait between gets
-	intervalJitter   int64  // the max jitter to be added, per fetch. Jitter is a rand with this as max.
-	RestrictToScheme bool   // if true, only crawls urls with the same scheme as baseURL
-	RespectRobots    bool   // whether or not to respect the robots.txt
-	robots           *robotstxt.Group
-	maxDepth         int
-	Pages            map[string]Page
-	foundURLs        map[string]struct{} // keeps track of urls found to prevent recrawling
-	fetchedURLs      map[string]error    // urls that have been fetched with their status
-	skippedURLs      map[string]struct{} // urls within the same domain that are not retrieved
-	extHosts         map[string]struct{} // list of external hosts TODO: elide?
-	extLinks         map[string]struct{} // list of external links; not fetched
+	wg                 sync.WaitGroup
+	*url.URL                  // the start url
+	bot                string // the name of the bot for robots
+	concurrency        int    // concurrency level of crawling
+	fetchInterval      int64  // if > 0, interval, in milliseconds to wait between gets
+	intervalJitter     int64  // the max jitter to be added, per fetch. Jitter is a rand with this as max.
+	RestrictToScheme   bool   // if true, only crawls urls with the same scheme as baseURL
+	RespectRobots      bool   // whether or not to respect the robots.txt
+	CheckExternalLinks bool   // Check the status of any links that go to other domains
+	robots             *robotstxt.Group
+	maxDepth           int
+	Pages              map[string]Page
+	foundURLs          map[string]struct{} // keeps track of urls found to prevent recrawling
+	fetchedURLs        map[string]error    // urls that have been fetched with their status
+	skippedURLs        map[string]struct{} // urls within the same domain that are not retrieved
+	externalHosts      map[string]struct{} // list of external hosts TODO: elide?
+	externalLinks      map[string]struct{} // list of external links; not fetched
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
@@ -163,8 +164,8 @@ func NewSpider(start string) (*Spider, error) {
 		foundURLs:     make(map[string]struct{}),
 		fetchedURLs:   make(map[string]error),
 		skippedURLs:   make(map[string]struct{}),
-		extHosts:      make(map[string]struct{}),
-		extLinks:      make(map[string]struct{}),
+		externalHosts: make(map[string]struct{}),
+		externalLinks: make(map[string]struct{}),
 	}
 	spider.URL, err = url.Parse(start)
 	if err != nil {
@@ -202,7 +203,7 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 	}
 	s.Queue.Enqueue(Page{URL: s.URL})
 	err = s.crawl(S)
-	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.extLinks), len(s.extHosts)), err
+	return fmt.Sprintf("%d nodes were processed; %d external links linking to %d external hosts were not processed", len(s.Pages), len(s.externalLinks), len(s.externalHosts)), err
 }
 
 // This crawl does all the work.
@@ -218,6 +219,9 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		}
 		// see if this is an external url
 		if s.externalURL(page.URL) {
+			if s.CheckExternalLinks {
+				s.fetchExternalLink(page.URL)
+			}
 			continue
 		}
 		// check to see if this url should be skipped for other reasons
@@ -302,14 +306,14 @@ func (s *Spider) externalURL(u *url.URL) bool {
 	if u.Host != s.URL.Host {
 		s.Lock()
 		// see if the host is already in the map
-		_, ok := s.extHosts[u.Host]
+		_, ok := s.externalHosts[u.Host]
 		if !ok {
-			s.extHosts[u.Host] = struct{}{}
+			s.externalHosts[u.Host] = struct{}{}
 		}
 		// same with url
-		_, ok = s.extLinks[u.Path]
+		_, ok = s.externalLinks[u.String()]
 		if !ok {
-			s.extLinks[u.Path] = struct{}{}
+			s.externalLinks[u.String()] = struct{}{}
 		}
 		s.Unlock()
 		return true
