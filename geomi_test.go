@@ -15,11 +15,11 @@ type testResult struct {
 	urls []string
 }
 
-func (t *testFetcher) Fetch(url string) (string, []string, error) {
+func (t *testFetcher) Fetch(url string) (string, ResponseInfo, []string) {
 	if res, ok := (*t)[url]; ok {
-		return res.body, res.urls, nil
+		return res.body, ResponseInfo{}, res.urls
 	}
-	return "", nil, fmt.Errorf("not found: %s", url)
+	return "", ResponseInfo{Err: fmt.Errorf("not found: %s", url)}, nil
 }
 
 // tester is a populated testFetcher.

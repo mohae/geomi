@@ -52,7 +52,7 @@ import (
 type Fetcher interface {
 	// Fetch returns the body of URL and
 	// a slice of URLs found on that page
-	Fetch(url string) (body string, urls []string, err error)
+	Fetch(url string) (body string, r ResponseInfo, urls []string)
 }
 
 //}
@@ -75,8 +75,8 @@ type Page struct {
 	links    []string // immediate children
 }
 
-// responseInfo contains the status and error information from a get
-type responseInfo struct {
+// ResponseInfo contains the status and error information from a get
+type ResponseInfo struct {
 	Status     string
 	StatusCode int
 	Err        error
@@ -89,24 +89,29 @@ type Site struct {
 
 // Implements fetcher.
 // TODO: make the design cleaner
-func (s Site) Fetch(url string) (body string, urls []string, err error) {
+func (s Site) Fetch(url string) (body string, r ResponseInfo, urls []string) {
 	// see if the passed url is outside of the baseURL
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", nil, err
+		r.Err = err
+		return "", r, nil
 	}
 	defer resp.Body.Close()
+	r.Status = resp.Status
+	r.StatusCode = resp.StatusCode
 	buff := &bytes.Buffer{}
 	tee := io.TeeReader(resp.Body, buff)
 	tokens := getTokens(tee)
 	if len(tokens) == 0 {
-		return "", nil, fmt.Errorf("%s: nothing in body", url)
+		r.Err = fmt.Errorf("%s: nothing in body", url)
+		return "", r, nil
 	}
 	urls, err = s.linksFromTokens(tokens)
 	if err != nil {
-		return "", nil, err
+		r.Err = err
+		return "", r, nil
 	}
-	return buff.String(), urls, nil
+	return buff.String(), r, urls
 }
 
 // linksFromTokens returns a list of links (href a) found in the token slice
@@ -151,10 +156,10 @@ type Spider struct {
 	maxDepth           int
 	Pages              map[string]Page
 	foundURLs          map[string]struct{}     // keeps track of urls found to prevent recrawling
-	fetchedURLs        map[string]responseInfo // urls that have been fetched with their status
+	fetchedURLs        map[string]ResponseInfo // urls that have been fetched with their status
 	skippedURLs        map[string]struct{}     // urls within the same domain that are not retrieved
 	externalHosts      map[string]struct{}     // list of external hosts TODO: elide?
-	externalLinks      map[string]responseInfo // list of external links; if fetched,
+	externalLinks      map[string]ResponseInfo // list of external links; if fetched,
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
@@ -169,10 +174,10 @@ func NewSpider(start string) (*Spider, error) {
 		RespectRobots: true,
 		Pages:         make(map[string]Page),
 		foundURLs:     make(map[string]struct{}),
-		fetchedURLs:   make(map[string]error),
+		fetchedURLs:   make(map[string]ResponseInfo),
 		skippedURLs:   make(map[string]struct{}),
 		externalHosts: make(map[string]struct{}),
-		externalLinks: make(map[string]responseInfo),
+		externalLinks: make(map[string]ResponseInfo),
 	}
 	spider.URL, err = url.Parse(start)
 	if err != nil {
@@ -215,7 +220,6 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 
 // This crawl does all the work.
 func (s *Spider) crawl(fetcher Fetcher) error {
-	var err error
 	for !s.Queue.IsEmpty() {
 		// get next item from queue
 		page := s.Queue.Dequeue().(Page)
@@ -238,12 +242,13 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		}
 		s.foundURLs[page.URL.String()] = struct{}{}
 		// get the url
-		page.body, page.links, err = fetcher.Fetch(page.URL.String())
+		r := ResponseInfo{}
+		page.body, r, page.links = fetcher.Fetch(page.URL.String())
 		// add the page and status to the map. map isn't checked for membership becuase we don't
 		// fetch found urls.
 		s.Lock()
 		s.Pages[page.URL.String()] = page
-		s.fetchedURLs[page.URL.String()] = err
+		s.fetchedURLs[page.URL.String()] = r
 		s.Unlock()
 		// add the urls that the node contains to the queue
 		for _, l := range page.links {
@@ -320,7 +325,7 @@ func (s *Spider) externalURL(u *url.URL) bool {
 		// same with url
 		_, ok = s.externalLinks[u.String()]
 		if !ok {
-			s.externalLinks[u.String()] = responseInfo{}
+			s.externalLinks[u.String()] = ResponseInfo{}
 		}
 		s.Unlock()
 		return true
@@ -332,7 +337,7 @@ func (s *Spider) externalURL(u *url.URL) bool {
 // does not implement fetcher
 func (s *Spider) fetchExternalLink(u *url.URL) error {
 	// if this has already benn fetched, don't
-	var ri responseInfo
+	var ri ResponseInfo
 	s.Lock()
 	r, _ := s.externalLinks[u.String()]
 	s.Unlock()
