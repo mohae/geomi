@@ -151,7 +151,7 @@ type Spider struct {
 	maxDepth           int
 	Pages              map[string]Page
 	foundURLs          map[string]struct{}     // keeps track of urls found to prevent recrawling
-	fetchedURLs        map[string]error        // urls that have been fetched with their status
+	fetchedURLs        map[string]responseInfo // urls that have been fetched with their status
 	skippedURLs        map[string]struct{}     // urls within the same domain that are not retrieved
 	externalHosts      map[string]struct{}     // list of external hosts TODO: elide?
 	externalLinks      map[string]responseInfo // list of external links; if fetched,
@@ -337,10 +337,8 @@ func (s *Spider) fetchExternalLink(u *url.URL) error {
 	r, _ := s.externalLinks[u.String()]
 	s.Unlock()
 	if r != ri { // if !0 value, it's been retrieved
-
 		return nil
 	}
-	s.Unlock()
 	resp, err := http.Get(u.String())
 	resp.Body.Close()
 	if err != nil {
