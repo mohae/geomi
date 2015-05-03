@@ -335,8 +335,9 @@ func (s *Spider) fetchExternalLink(u *url.URL) error {
 	var ri responseInfo
 	s.Lock()
 	r, _ := s.externalLinks[u.String()]
+	s.Unlock()
 	if r != ri { // if !0 value, it's been retrieved
-		s.Unlock()
+
 		return nil
 	}
 	s.Unlock()
