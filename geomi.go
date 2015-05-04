@@ -350,7 +350,7 @@ func (s *Spider) externalURL(u *url.URL) bool {
 	return false
 }
 
-// fetchExternalLink: fetches an external link and check's it status. Note, this
+// fetchExternalLink: fetches an external link's HEAD and check's it status. Note, this
 // does not implement fetcher
 func (s *Spider) fetchExternalLink(u *url.URL) error {
 	// if this has already benn fetched, don't
@@ -361,8 +361,7 @@ func (s *Spider) fetchExternalLink(u *url.URL) error {
 	if r != ri { // if !0 value, it's been retrieved
 		return nil
 	}
-	resp, err := http.Get(u.String())
-	resp.Body.Close()
+	resp, err := http.Head(u.String())
 	if err != nil {
 		r.Err = err
 		s.Lock()
