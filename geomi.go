@@ -56,14 +56,6 @@ type Fetcher interface {
 	Fetch(url string) (body string, r ResponseInfo, urls []string)
 }
 
-//}
-// fetched tracks URLs that have been (or are being) fetched.
-// The lock must be held while reading from or writing to the map.
-var fetched = struct {
-	m map[string]error
-	sync.Mutex
-}{m: make(map[string]error)}
-
 var loading = errors.New("url load in progress") // sentinel value
 
 // a page is a url. This is usually some content wiht a number of elements, but it
