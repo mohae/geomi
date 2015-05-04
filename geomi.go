@@ -37,6 +37,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -200,6 +201,18 @@ func (s *Spider) SetFetchInterval(i int64) {
 	if jitter >= 10 {
 		s.intervalJitter = jitter
 	}
+}
+
+// ExternalHosts returns a sorted list of external hosts
+func (s *Spider) ExternalHosts() []string {
+	hosts := make([]string, len(s.externalHosts), len(s.externalHosts))
+	i := 0
+	for k, _ := range s.externalHosts {
+		hosts[i] = k
+		i++
+	}
+	sort.Strings(hosts)
+	return hosts
 }
 
 // Crawl is the exposed method for starting a crawl at baseURL. The crawl private method

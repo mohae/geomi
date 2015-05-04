@@ -3,6 +3,7 @@ package geomi
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"testing"
 	"time"
 )
@@ -269,4 +270,29 @@ func TestFetchInterval(t *testing.T) {
 	if t2-t1 < (3*s.fetchInterval) || t2-t1 > (3*(s.fetchInterval+s.intervalJitter)) {
 		t.Errorf("Expected the fecth of 3 urls to take between %dms and %dms, it took %dms", (3 * s.fetchInterval), (3 * (s.fetchInterval + s.intervalJitter)), t2-t1)
 	}
+}
+
+func TestExternalHosts(t *testing.T) {
+	s, _ := NewSpider("http://golang.org")
+	hosts := make([]string, 4, 4)
+	hosts[0] = "twitter.com"
+	hosts[1] = "google.com"
+	hosts[2] = "github.com"
+	hosts[3] = "linkedin.com"
+
+	for _, v := range hosts {
+		s.externalHosts[v] = struct{}{}
+	}
+	sort.Strings(hosts)
+	h := s.ExternalHosts()
+	if len(h) != len(hosts) {
+		t.Errorf("Expected returned host list to have %d elements, contained %d", len(hosts), len(h))
+		return
+	}
+	for i, v := range h {
+		if v != hosts[i] {
+			t.Errorf("Expected element %d in returned hosts list to be %q, got %q", i, hosts[i], v)
+		}
+	}
+
 }
