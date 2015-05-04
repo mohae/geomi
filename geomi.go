@@ -215,6 +215,18 @@ func (s *Spider) ExternalHosts() []string {
 	return hosts
 }
 
+// ExternalLinks returns a sorted list of external Links
+func (s *Spider) ExternalLinks() []string {
+	links := make([]string, len(s.externalLinks), len(s.externalLinks))
+	i := 0
+	for k, _ := range s.externalLinks {
+		links[i] = k
+		i++
+	}
+	sort.Strings(links)
+	return links
+}
+
 // Crawl is the exposed method for starting a crawl at baseURL. The crawl private method
 // does the actual work. The depth is the maximum depth, or distance, to crawl from the
 // baseURL. If depth == -1, no limits are set and it is expected that the entire site

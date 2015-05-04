@@ -296,3 +296,33 @@ func TestExternalHosts(t *testing.T) {
 	}
 
 }
+
+func TestExternalLinks(t *testing.T) {
+	s, _ := NewSpider("http://golang.org")
+	links := make([]string, 6, 6)
+	links[0] = "https://twitter.com/"
+	links[1] = "https://google.com/"
+	links[2] = "https://github.com/mohae/invalid/"
+	links[3] = "https://github.com/"
+	links[4] = "https://github.com/mohae/"
+	links[5] = "https://linkedin.com/"
+
+	// Setup, including  response info
+	for _, v := range links {
+		s.externalLinks[v] = ResponseInfo{Status: "200 OK", StatusCode: 200, Err: nil}
+	}
+	s.externalLinks["https://github.com/mohae/invalid/"] = ResponseInfo{Status: "404 Not Found", StatusCode: 404, Err: nil}
+
+	sort.Strings(links)
+	l := s.ExternalLinks()
+	if len(l) != len(links) {
+		t.Errorf("Expected returned links list to have %d elements, contained %d", len(links), len(l))
+		return
+	}
+	for i, v := range l {
+		if v != links[i] {
+			t.Errorf("Expected element %d in returned links list to be %q, got %q", i, links[i], v)
+		}
+	}
+
+}
