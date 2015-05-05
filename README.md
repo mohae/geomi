@@ -27,18 +27,14 @@ For an example of an implementation, see [kraul](https://github.com/mohae/kraul)
 ## Usage
 TODO
 
-* retrieve urls outside of the start url path, including external urls, and record their status. No further parsing or crawling will be done from said urls.
 * add support for recording how long the response took.
-* keep track of external hosts found (outside of target domain)
-* keep track of external urls found (outside of target domain)
 * record crawl time for historical purposes
-* add support for getting information out of the spider. Supplying a custom fetcher may be the route taken instead. Not sure as I haven't yet pondered this. In general, support needs to be added for making the information that the spider gathers useful.
+* add support for getting information out of the spider. Supplying a custom fetcher may be the route taken instead. Not sure as I haven't yet pondered this. In general, support needs to be added for making the information that the spider gathers useful. __In Process__
 * add concurrent fetching support with a configurable limit on the number of concurrent fetchers. The fetchInterval and jitter functionality that geomi currenlty has was done with concurrency in mind.
 
 ## Possible functionality
 This is a list of functionality that may be added to geomi, but not guaranteed. This list is in addition to the core functionality that geomi would have once it is completed.
 
-* optional support for alternate scheme. Since geomi restricts itself to the set base url, urls in other schemes, e.g. `https` vs `http` will not be crawled. Enabling support for using an alternate scheme would enable geomi to crawl both `http` and `https` urls. These are the only schemes that would be supported.
 * optional support for retrieving links outside of base. If enabled, geomi would retrieve the otherwise excluded link and save both the response body and response code. This would enable detection of changes to linked content, content that has moved, and dead links. Links on the retrieved page would not be extracted and geomi would not do additional crawling from the node in question.
 
 ## Licensing

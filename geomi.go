@@ -214,6 +214,30 @@ func NewSpider(start string) (*Spider, error) {
 	return spider, nil
 }
 
+// NewSpiderFromConfig returns a spider with it's configuration set to the passed
+// config.
+func NewSpiderFromConfig(start string, c *Config) (*Spider, error) {
+	if start == "" {
+		return nil, errors.New("newSpider: the start url cannot be empty")
+	}
+	var err error
+	spider := &Spider{
+		Queue:         queue.New(128, 0),
+		Config:        c,
+		Pages:         make(map[string]Page),
+		foundURLs:     make(map[string]struct{}),
+		fetchedURLs:   make(map[string]ResponseInfo),
+		skippedURLs:   make(map[string]struct{}),
+		externalHosts: make(map[string]struct{}),
+		externalLinks: make(map[string]ResponseInfo),
+	}
+	spider.URL, err = url.Parse(start)
+	if err != nil {
+		return nil, err
+	}
+	return spider, nil
+}
+
 // ExternalHosts returns a sorted list of external hosts
 func (s *Spider) ExternalHosts() []string {
 	hosts := make([]string, len(s.externalHosts), len(s.externalHosts))
