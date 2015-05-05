@@ -242,7 +242,7 @@ func TestSkip(t *testing.T) {
 	}
 	s, _ := NewSpider("http://golang.org/cmd/")
 	for _, test := range tests {
-		s.RestrictToScheme = test.RestrictToScheme
+		s.Config.RestrictToScheme = test.RestrictToScheme
 		page := &Page{URL: test.URL}
 		skip := s.skip(page.URL)
 		if skip != test.expected {
@@ -255,20 +255,20 @@ func TestFetchInterval(t *testing.T) {
 	s, _ := NewSpider("http://golang.org/")
 	u, _ := url.Parse("http://golang.org/")
 	s.Queue.Enqueue(Page{URL: u})
-	s.SetFetchInterval(200) // 200ms
-	if s.fetchInterval != 200 {
-		fmt.Errorf("Expected fetchInterval to be 200, got %d", s.fetchInterval)
+	s.Config.SetFetchInterval(100 * time.Millisecond)
+	if s.Config.FetchInterval != 100*time.Millisecond {
+		fmt.Errorf("Expected fetchInterval to be 100, got %d", s.Config.FetchInterval)
 	}
-	if s.intervalJitter != 40 {
-		fmt.Errorf("Expected intervalJitter to be 40, got %d", s.intervalJitter)
+	if s.Config.Jitter != 100*time.Millisecond {
+		fmt.Errorf("Expected intervalJitter to be 100, got %d", s.Config.Jitter)
 	}
-	t1 := time.Now().UTC().UnixNano() / 1000000
+	t1 := time.Now()
 	s.maxDepth = 1
 	s.crawl(tester)
-	t2 := time.Now().UTC().UnixNano() / 1000000
+	ts := time.Now().Sub(t1)
 	// the time it took should be in the range of 3 * (fetchInterval) - 3 * (fetchInterval + intervalJitter)
-	if t2-t1 < (3*s.fetchInterval) || t2-t1 > (3*(s.fetchInterval+s.intervalJitter)) {
-		t.Errorf("Expected the fecth of 3 urls to take between %dms and %dms, it took %dms", (3 * s.fetchInterval), (3 * (s.fetchInterval + s.intervalJitter)), t2-t1)
+	if ts < (3*s.Config.FetchInterval) || ts > (3*(s.Config.FetchInterval+s.Config.Jitter)) {
+		t.Errorf("Expected the fecth of 3 urls to take between %dms and %dms, it took %dms", (3 * s.Config.FetchInterval), (3 * (s.Config.FetchInterval + s.Config.Jitter)), ts)
 	}
 }
 

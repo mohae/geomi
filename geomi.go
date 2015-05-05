@@ -47,6 +47,14 @@ import (
 	"golang.org/x/net/html"
 )
 
+// Defaults
+var (
+	DefaultFetchInterval  time.Duration = time.Second                                                                                            // default min. time between fetches
+	DefaultJitter         time.Duration = time.Second                                                                                            // default max additional, random, fetch delay
+	DefaultRobotUserAgent string        = "Googlebot (geomi)"                                                                                    // default user agent identifier for the bot.
+	DefaultUserAgent      string        = "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36" // the default user agent
+)
+
 // Fetcher is an interface that makes it easier to test. In the future, it may be
 // useful for other purposes, but that would require exporting the method that uses
 // it first.
@@ -56,7 +64,36 @@ type Fetcher interface {
 	Fetch(url string) (body string, r ResponseInfo, urls []string)
 }
 
-var loading = errors.New("url load in progress") // sentinel value
+type Config struct {
+	CheckExternalLinks bool          // Whether a HEAD should be performed on external links
+	FetchInterval      time.Duration // The minimum time between fetching URLS
+	Jitter             time.Duration // The max amount of jitter to add to the FetchInterval, the actual jitter is random.
+	RespectRobots      bool          // Whether the robots.txt should be respected
+	RestrictToScheme   bool          // Whether the crawl should be restricted to the base URL's scheme
+	RobotUserAgent     string        // The user agent for the robot
+	UserAgent          string        // The user agent to use.
+}
+
+// NewConfig returns a Config struct with Geomi defaults applied.
+func NewConfig() *Config {
+	return &Config{
+		CheckExternalLinks: true,
+		FetchInterval:      DefaultFetchInterval,
+		Jitter:             DefaultJitter,
+		RespectRobots:      true,
+		RestrictToScheme:   false,
+		RobotUserAgent:     DefaultRobotUserAgent,
+		UserAgent:          DefaultUserAgent,
+	}
+}
+
+// SetFetchInterval sets both the FetchInterval and Jitter to the passed value.
+// Min FetchInterval will always be == t while the Max Fetchinterval will always be
+// 2t, with most fetches being a random value between t and 2t.
+func (c *Config) SetFetchInterval(t time.Duration) {
+	c.FetchInterval = t
+	c.Jitter = t
+}
 
 // a page is a url. This is usually some content wiht a number of elements, but it
 // could be something as simple as the url for cat.jpg on your site and represent that
@@ -69,6 +106,10 @@ type Page struct {
 }
 
 // ResponseInfo contains the status and error information from a get
+// TODO:
+//	Add Expire date
+//	Add time for request to return
+//	Should the body be in here?
 type ResponseInfo struct {
 	Status     string
 	StatusCode int
@@ -136,23 +177,17 @@ func (s *Site) linksFromTokens(tokens []html.Token) ([]string, error) {
 type Spider struct {
 	*queue.Queue
 	sync.Mutex
-	wg                 sync.WaitGroup
-	*url.URL                  // the start url
-	bot                string // the name of the bot for robots
-	concurrency        int    // concurrency level of crawling
-	fetchInterval      int64  // if > 0, interval, in milliseconds to wait between gets
-	intervalJitter     int64  // the max jitter to be added, per fetch. Jitter is a rand with this as max.
-	RestrictToScheme   bool   // if true, only crawls urls with the same scheme as baseURL
-	RespectRobots      bool   // whether or not to respect the robots.txt
-	CheckExternalLinks bool   // Check the status of any links that go to other domains
-	robots             *robotstxt.Group
-	maxDepth           int
-	Pages              map[string]Page
-	foundURLs          map[string]struct{}     // keeps track of urls found to prevent recrawling
-	fetchedURLs        map[string]ResponseInfo // urls that have been fetched with their status
-	skippedURLs        map[string]struct{}     // urls within the same domain that are not retrieved
-	externalHosts      map[string]struct{}     // list of external hosts TODO: elide?
-	externalLinks      map[string]ResponseInfo // list of external links; if fetched,
+	wg            sync.WaitGroup
+	*url.URL      // the start url
+	Config        *Config
+	robots        *robotstxt.Group
+	maxDepth      int
+	Pages         map[string]Page
+	foundURLs     map[string]struct{}     // keeps track of urls found to prevent recrawling
+	fetchedURLs   map[string]ResponseInfo // urls that have been fetched with their status
+	skippedURLs   map[string]struct{}     // urls within the same domain that are not retrieved
+	externalHosts map[string]struct{}     // list of external hosts TODO: elide?
+	externalLinks map[string]ResponseInfo // list of external links; if fetched,
 }
 
 // returns a Spider with the its site's baseUrl set. The baseUrl is the start point for
@@ -162,9 +197,9 @@ func NewSpider(start string) (*Spider, error) {
 		return nil, errors.New("newSpider: the start url cannot be empty")
 	}
 	var err error
-	spider := &Spider{Queue: queue.New(128, 0),
-		bot:           "geomi",
-		RespectRobots: true,
+	spider := &Spider{
+		Queue:         queue.New(128, 0),
+		Config:        NewConfig(),
 		Pages:         make(map[string]Page),
 		foundURLs:     make(map[string]struct{}),
 		fetchedURLs:   make(map[string]ResponseInfo),
@@ -177,22 +212,6 @@ func NewSpider(start string) (*Spider, error) {
 		return nil, err
 	}
 	return spider, nil
-}
-
-// SetFetchInterval set's the spiders wait interval, and calculates the intervalJitter
-// value for the random jitter added to the wait. This value is in milliseconds, 1000
-// means 1 second.
-//
-// When fetchInterval > 0:
-// time between fetches = fetchInterval + rand(intervalJitter)
-// max time between fetches = fetchInterval + intervalJitter
-func (s *Spider) SetFetchInterval(i int64) {
-	s.fetchInterval = i
-	jitter := i / 5 // jitter is, at most 20% of the fetchInterval, Min interval is 10ms
-	// 10ms is used as the floor because arbitrary. A larger floor might be reasonable
-	if jitter >= 10 {
-		s.intervalJitter = jitter
-	}
 }
 
 // ExternalHosts returns a sorted list of external hosts
@@ -227,7 +246,7 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 	s.maxDepth = depth
 	S := Site{URL: s.URL}
 	// if we are to respect the robots.txt, set up the info
-	if s.RespectRobots {
+	if s.Config.RespectRobots {
 		s.getRobotsTxt()
 	}
 	s.Queue.Enqueue(Page{URL: s.URL})
@@ -247,7 +266,7 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 		}
 		// see if this is an external url
 		if s.externalURL(page.URL) {
-			if s.CheckExternalLinks {
+			if s.Config.CheckExternalLinks {
 				s.fetchExternalLink(page.URL)
 			}
 			continue
@@ -272,14 +291,16 @@ func (s *Spider) crawl(fetcher Fetcher) error {
 			u, _ := url.Parse(l)
 			s.Queue.Enqueue(Page{URL: u, distance: page.distance + 1})
 		}
-		// if their is a wait between fetches, sleep for that + random jitter
-		if s.fetchInterval > 0 {
-			wait := s.fetchInterval
+		// if there is a wait between fetches, sleep for that + random jitter
+		if s.Config.FetchInterval > 0 {
+			wait := s.Config.FetchInterval
 			// if there is a value for jitter, add a random jitter
-			if s.intervalJitter > 0 {
-				wait += rand.Int63n(s.intervalJitter)
+			if s.Config.Jitter > 0 {
+				n := s.Config.Jitter.Nanoseconds()
+				n = rand.Int63n(n)
+				wait += time.Duration(n) * time.Nanosecond
 			}
-			time.Sleep(time.Duration(wait) * time.Millisecond)
+			time.Sleep(wait)
 		}
 	}
 	return nil
@@ -301,13 +322,13 @@ func (s *Spider) skip(u *url.URL) bool {
 	}
 
 	// skip if we are restricted to current scheme
-	if s.RestrictToScheme {
+	if s.Config.RestrictToScheme {
 		if u.Scheme != s.URL.Scheme {
 			s.addSkippedURL(u)
 			return true
 		}
 	}
-	if s.RespectRobots {
+	if s.Config.RespectRobots {
 		ok := s.robotsAllowed(u)
 		if !ok {
 			return false
@@ -388,7 +409,7 @@ func (s *Spider) getRobotsTxt() error {
 	if err != nil {
 		return err
 	}
-	s.robots = robots.FindGroup(s.bot)
+	s.robots = robots.FindGroup(s.Config.RobotUserAgent)
 	return nil
 }
 
