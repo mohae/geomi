@@ -42,8 +42,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mohae/utilitybelt/queue"
-	"github.com/temoto/robotstxt.go"
+	"github.com/mohae/firkin/queue"
+	"github.com/temoto/robotstxt-go"
 	"golang.org/x/net/html"
 )
 
@@ -198,7 +198,7 @@ func NewSpider(start string) (*Spider, error) {
 	}
 	var err error
 	spider := &Spider{
-		Queue:         queue.New(128, 0),
+		Queue:         queue.NewQ(128),
 		Config:        NewConfig(),
 		Pages:         make(map[string]Page),
 		foundURLs:     make(map[string]struct{}),
@@ -222,7 +222,7 @@ func NewSpiderFromConfig(start string, c *Config) (*Spider, error) {
 	}
 	var err error
 	spider := &Spider{
-		Queue:         queue.New(128, 0),
+		Queue:         queue.NewQ(128),
 		Config:        c,
 		Pages:         make(map[string]Page),
 		foundURLs:     make(map[string]struct{}),
@@ -282,12 +282,16 @@ func (s *Spider) Crawl(depth int) (message string, err error) {
 func (s *Spider) crawl(fetcher Fetcher) error {
 	for !s.Queue.IsEmpty() {
 		// get next item from queue
-		page := s.Queue.Dequeue().(Page)
+		p, ok := s.Queue.Dequeue()
+		if !ok {
+			return errors.New("crawl dequeue error: expected a page, got none")
+		}
 		// if a depth value was passed and the distance is > depth, we are done
 		// depth of 0 means no limit
-		if s.maxDepth != -1 && page.distance > s.maxDepth {
+		if s.maxDepth != -1 && p.(Page).distance > s.maxDepth {
 			return nil
 		}
+		page := p.(Page)
 		// see if this is an external url
 		if s.externalURL(page.URL) {
 			if s.Config.CheckExternalLinks {
